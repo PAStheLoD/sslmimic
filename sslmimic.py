@@ -63,64 +63,52 @@ class SSLFile2(socket._fileobject):
     """
     Same as socket._fileobject.read
     """
-    if type(self._rbuf) is not str:
-        _pos = self._rbuf.tell()
-        self._rbuf.seek(0)
-        data = self._rbuf.read(self._rbufsize)
-        self._rbuf.seek(_pos)
-    else:
-        data = self._rbuf
-
-    rem = size - len(data)
-
+    data = self._rbuf
     if size < 0:
-        # Read until EOF
-        buffers = []
-        if data:
-            buffers.append(data)
-        self._rbuf = ""
-        if self._rbufsize <= 1:
-            recv_size = self.default_bufsize
-        else:
-            recv_size = self._rbufsize
-        while True:
-            data = self._sock.recv(recv_size)
-            if not data:
-              break
-            buffers.append(data)
-        x = "".join(buffers)
-        print(x)
-        return x
+      # Read until EOF
+      buffers = []
+      if data:
+        buffers.append(data)
+      self._rbuf = ""
+      if self._rbufsize <= 1:
+        recv_size = self.default_bufsize
+      else:
+        recv_size = self._rbufsize
+      while True:
+        data = self._sock.recv(recv_size)
+        if not data:
+          break
+        buffers.append(data)
+      return "".join(buffers)
     else:
-        # Read until size bytes or EOF seen, whichever comes first
-        buf_len = self._rbufsize
-        if buf_len >= size:
-            if type(self._rbuf) is not str:
-                self._rbuf.truncate(0)
-                try:
-                    data = data + self._sock.recv(rem)
-                except OpenSSL.SSL.SysCallError:
-                    print("syscallerror.")
-                self._rbuf.seek(0)
-            return data
-        buffers = []
-        if data:
-            buffers.append(data)
-        self._rbuf = ""
-        while True:
-            try:
-                data = ''
-                data = self._sock.recv(self._rbufsize)
-                end = False
-            except OpenSSL.SSL.ZeroReturnError:
-                end = True
-            except OpenSSL.SSL.SysCallError:
-                end = True
-            buffers.append(data)
-            if end:
-                break
-        x = "".join(buffers)
-        return x
+      # Read until size bytes or EOF seen, whichever comes first
+      buf_len = len(data)
+      if buf_len >= size:
+        self._rbuf = data[size:]
+        return data[:size]
+      buffers = []
+      if data:
+        buffers.append(data)
+      self._rbuf = ""
+      while True:
+        left = size - buf_len
+        recv_size = max(self._rbufsize, left)
+        try:
+          data = self._sock.recv(recv_size)
+        except OpenSSL.SSL.ZeroReturnError:
+          data = ''
+        except OpenSSL.SSL.SysCallError:
+          data = ''
+        if not data:
+          break
+        buffers.append(data)
+        n = len(data)
+        if n >= left:
+          self._rbuf = data[left:]
+          buffers[-1] = data[:left]
+          break
+        buf_len += n
+      return "".join(buffers)
 
 class ProxyServer(BaseHTTPServer.HTTPServer):
   """
@@ -218,7 +206,6 @@ class ProxyRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
       request_log.SetValue('connect_begin', time.time())
       request_log.TimeStart('connect')
       outbound_connection.connect((target_ip, target_host[1]))
-      
       request_log.TimeStop('connect')
       request_log.SetValue('connect_end', time.time())
     except socket.error, e:
@@ -273,7 +260,6 @@ class ProxyRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
           post_block = datafd.read(last_itr)
         else:
           post_block = datafd.read(RSIZE)
-        print(post_block)
         outbound_connection.sendall(post_block)
       request_log.TimeStop('post_cycle')
       fetch_logging.debug('Completed post')
@@ -593,12 +579,12 @@ class ProxyRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
     self.log.debug('do_POST called: %s' % self.path)
     request_log = self.fetch2(orig_request, self.wfile, self.rfile)
 
-#    if not request_log:
-#      return
+    if not request_log:
+      return
 
-#    if self.display_filter:
-#      if not self.display_filter.search(self.path):
-#        return
+    if self.display_filter:
+      if not self.display_filter.search(self.path):
+        return
 
     if self.interactive:
       self.Log(request_log)
@@ -661,16 +647,6 @@ class ProxyRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
     self.log.debug('SSLSpoofCheck for %s: %s' % (host, spoof))
     return spoof
 
-  def do_DELETE(self):
-      self.log.debug('do_DELETE called')
-      orig_request = ssl_proxy_log.Request(self.path, 'DELETE', self.headers,
-            self.log, self.http_redirect_table, self.ssl_redirect_table)
-      self.log.debug('orig_request built, calling fetch2')
-
-      request_log = self.fetch2(orig_request, self.wfile)
-      if self.interactive:
-          self.Log(request_log)
-
   def do_CONNECT(self):
     """
     Function called by HTTPServer. (Need one of these for each of the HTTP
@@ -724,17 +700,7 @@ class ProxyRequestHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
 
     # Build a new path for an HTTPS operation, and call the correct method
     target_host = pre_ssl_request.GetTargetHost()
-    
-
-    _parts = self.path.split('/', 3)
-    if len(_parts) > 3:
-        _path = _parts[3]
-    else:
-        _path = ''
-    
-    
-    self.path = 'https://%s:%s/%s' % (target_host[0], target_host[1], _path)
-    print('URL: %s' % self.path)
+    self.path = 'https://%s:%s%s' % (target_host[0], target_host[1], self.path)
 
     if not hasattr(self, mname):
       self.send_error(501, "Unsupported method (%r)" % self.command)
@@ -1018,7 +984,7 @@ def main():
   target_port = 1443
   thread = True
   display_filter = None
-  dump_payload = True
+  dump_payload = False
   create_missing_cert = True
 
   # Controls which hosts will be MIMed. Can use regular expressions.

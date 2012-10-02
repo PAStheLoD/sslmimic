@@ -349,7 +349,7 @@ class Request:
     return self.live_relative_path
 
   def GetOutboundRequest(self):
-    if self.method in ['POST', 'GET', 'HEAD', 'DELETE']:
+    if self.method in ['POST', 'GET', 'HEAD']:
       del self.headers['proxy-connection']
       del self.headers['keep-alive']
 
@@ -377,7 +377,7 @@ class Request:
       return False
 
   def GetTargetHost(self):
-    if self.method in ['POST', 'GET', 'HEAD', 'DELETE']:
+    if self.method in ['POST', 'GET', 'HEAD']:
       target_host = self.live_url.split('://')[1].split('/')[0]
     elif self.method == 'CONNECT':
       target_host = self.live_url
